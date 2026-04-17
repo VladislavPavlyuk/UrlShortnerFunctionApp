@@ -1,0 +1,70 @@
+## Build
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+[Dd]ebug/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]uild/
+[Dd]ist/
+out/
+
+## Visual Studio / VS Code
+.vs/
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+## Azure Functions — secrets / local overrides
+local.settings.json
+**/local.settings.json
+
+## Publish profiles (machine-specific)
+*.pubxml.user
+*.publishsettings
+
+## NuGet / MSBuild
+*.nupkg
+**/packages/*
+!**/packages/build/
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## Test / coverage
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.coverage
+*.coveragexml
+.dotCover/
+
+## Rider / JetBrains
+.idea/
+*.sln.iml
+
+## OS / misc
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+~$*
+
+## Azure / Functions worker generated (if any escape obj)
+csx/
+*.azurePubxml
