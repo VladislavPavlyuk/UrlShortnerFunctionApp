@@ -10,16 +10,32 @@ public class ShortenRequest
 {
     public string Url { get; set; } = string.Empty;
     public string? CustomCode { get; set; }
+
+    /// <summary>Optional. After this moment (UTC) the short link answers with 410 Gone.</summary>
+    public DateTime? ExpiresAt { get; set; }
+}
+
+// One row in our in-memory store.
+public class ShortLinkEntry
+{
+    public string LongUrl { get; set; } = string.Empty;
+
+    /// <summary>null = never expires</summary>
+    public DateTime? ExpiresAt { get; set; }
 }
 
 public class UrlShortnerFunctions
 {
-    // In memory: short code -> full URL. Resets when the app restarts.
-    private static readonly Dictionary<string, string> UrlMappings = new Dictionary<string, string>();
+    // In memory: short code -> entry. Resets when the app restarts.
+    private static readonly Dictionary<string, ShortLinkEntry> UrlStorage = new();
+
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
     private static readonly Regex CustomCodePattern = new(@"^[a-zA-Z0-9_-]+$", RegexOptions.Compiled);
 
     private const int MaxCustomCodeLength = 64;
+
+    private static bool IsExpired(ShortLinkEntry entry) =>
+        entry.ExpiresAt is { } exp && exp <= DateTime.UtcNow;
 
     [Function("ShortenUrl")]
     public static async Task<HttpResponseData> ShortenUrl(
@@ -55,6 +71,13 @@ public class UrlShortnerFunctions
             return badResponse;
         }
 
+        if (data.ExpiresAt is { } deadline && deadline <= DateTime.UtcNow)
+        {
+            var badExp = req.CreateResponse(System.Net.HttpStatusCode.BadRequest);
+            await badExp.WriteStringAsync("expiresAt must be in the future (UTC).");
+            return badExp;
+        }
+
         var longLink = data.Url.Trim();
         var custom = data.CustomCode?.Trim();
 
@@ -65,7 +88,7 @@ public class UrlShortnerFunctions
             do
             {
                 code = Guid.NewGuid().ToString("N")[..6];
-            } while (UrlMappings.ContainsKey(code)); // Very unlikely, but avoid a duplicate key.
+            } while (UrlStorage.ContainsKey(code)); // Very unlikely, but avoid a duplicate key.
         }
         else
         {
@@ -78,7 +101,7 @@ public class UrlShortnerFunctions
                 return invalidCode;
             }
 
-            if (UrlMappings.ContainsKey(custom))
+            if (UrlStorage.ContainsKey(custom))
             {
                 // Someone already registered this short code.
                 var conflict = req.CreateResponse(System.Net.HttpStatusCode.Conflict);
@@ -89,7 +112,7 @@ public class UrlShortnerFunctions
             code = custom;
         }
 
-        UrlMappings[code] = longLink; // Remember this pair for GET /api/r/{code}
+        UrlStorage[code] = new ShortLinkEntry { LongUrl = longLink, ExpiresAt = data.ExpiresAt };
 
         var host = req.Url.GetLeftPart(UriPartial.Authority);
         string shortUrl = $"{host}/api/r/{code}";
@@ -106,15 +129,41 @@ public class UrlShortnerFunctions
         string code,
         FunctionContext executionContext)
     {
-        if (UrlMappings.TryGetValue(code, out var longLink))
+        if (!UrlStorage.TryGetValue(code, out var entry))
         {
-            var response = req.CreateResponse(System.Net.HttpStatusCode.Redirect);
-            response.Headers.Add("Location", longLink);
-            return response;
+            var notFoundResponse = req.CreateResponse(System.Net.HttpStatusCode.NotFound);
+            await notFoundResponse.WriteStringAsync("Short URL not found.");
+            return notFoundResponse;
         }
 
-        var notFoundResponse = req.CreateResponse(System.Net.HttpStatusCode.NotFound);
-        await notFoundResponse.WriteStringAsync("Short URL not found.");
-        return notFoundResponse;
+        if (IsExpired(entry))
+        {
+            var gone = req.CreateResponse(System.Net.HttpStatusCode.Gone);
+            await gone.WriteStringAsync("This short link has expired.");
+            return gone;
+        }
+
+        var response = req.CreateResponse(System.Net.HttpStatusCode.Redirect);
+        response.Headers.Add("Location", entry.LongUrl);
+        return response;
+    }
+
+    // DELETE /api/delete/{code} — remove a short code from storage.
+    [Function("DeleteShortUrl")]
+    public static async Task<HttpResponseData> DeleteShortUrl(
+        [HttpTrigger(AuthorizationLevel.Anonymous, "delete", Route = "delete/{code}")] HttpRequestData req,
+        string code,
+        FunctionContext executionContext)
+    {
+        if (!UrlStorage.Remove(code))
+        {
+            var notFound = req.CreateResponse(System.Net.HttpStatusCode.NotFound);
+            await notFound.WriteStringAsync("Short URL not found.");
+            return notFound;
+        }
+
+        var ok = req.CreateResponse(System.Net.HttpStatusCode.OK);
+        await ok.WriteStringAsync($"Short code \"{code}\" was deleted.");
+        return ok;
     }
 }

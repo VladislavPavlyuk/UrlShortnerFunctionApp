@@ -8,25 +8,65 @@
 </head>
 <body>
 
-    <h2>Azure Function URL shortener — test page</h2>
-    <p>Enter the long URL to shorten:</p>
+    <h2>Azure Function URL shortener</h2>
 
-    <input type="url" id="longUrl" placeholder="https://example.com/very-long-page-address" required>
-    <p>Optional - your own short code (letters, digits, underscore, hyphen):</p>
-    <input type="text" id="customCode" placeholder="e.g. google (leave empty for auto)" autocomplete="off">
-    <button onclick="shortenUrl()">Shorten URL</button>
+    <section>
+        <h3>API base</h3>
+        <label for="apiBase">Host (no trailing slash)</label>
+        <input type="text" id="apiBase" value="https://urlshortnerfunctionapp20260416202904-fwevcfctdaged5g0.germanywestcentral-01.azurewebsites.net/api" autocomplete="url">
+        <p class="hint">Change this if you deploy to another slot or region.</p>
+    </section>
+
+    <section>
+        <h3>Create short link</h3>
+        <label for="longUrl">Long URL</label>
+        <input type="url" id="longUrl" placeholder="https://example.com/very-long-page-address" required>
+
+        <label for="customCode">Custom short code (optional)</label>
+        <input type="text" id="customCode" placeholder="e.g. google (leave empty for random code)" autocomplete="off">
+
+        <label for="expiresAt">Expires at (optional, local time)</label>
+        <input type="datetime-local" id="expiresAt">
+        <p class="hint">Sent to the API as ISO-8601 UTC. After expiry, GET /api/r/&hellip; returns 410 Gone.</p>
+
+        <div class="row-actions">
+            <button type="button" onclick="shortenUrl()">Shorten URL</button>
+        </div>
+    </section>
+
+    <section>
+        <h3>Delete short link</h3>
+        <label for="deleteCode">Short code</label>
+        <input type="text" id="deleteCode" placeholder="code from /api/r/{code}" autocomplete="off">
+        <div class="row-actions">
+            <button type="button" class="btn-danger" onclick="deleteShortUrl()">Delete</button>
+        </div>
+    </section>
 
     <div id="result"></div>
 
     <script>
+        function apiBase() {
+            return document.getElementById('apiBase').value.trim().replace(/\/$/, '');
+        }
+
+        function showResult(ok, htmlOrText) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.className = (ok ? 'success' : 'error') + ' is-visible';
+            if (htmlOrText.includes('<')) {
+                resultDiv.innerHTML = htmlOrText;
+            } else {
+                resultDiv.innerText = htmlOrText;
+            }
+        }
+
         async function shortenUrl() {
             const longUrl = document.getElementById('longUrl').value.trim();
             const customRaw = document.getElementById('customCode').value.trim();
-            const resultDiv = document.getElementById('result');
-            const apiUrl = 'https://urlshortnerfunctionapp20260416202904-fwevcfctdaged5g0.germanywestcentral-01.azurewebsites.net/api/shorten';
+            const expLocal = document.getElementById('expiresAt').value;
 
             if (!longUrl) {
-                alert("Please enter a URL.");
+                alert('Please enter a URL.');
                 return;
             }
 
@@ -34,9 +74,19 @@
             if (customRaw) {
                 body.customCode = customRaw;
             }
+            if (expLocal) {
+                const d = new Date(expLocal);
+                if (isNaN(d.getTime())) {
+                    alert('Invalid expiry date.');
+                    return;
+                }
+                body.expiresAt = d.toISOString();
+            }
+
+            const url = apiBase() + '/shorten';
 
             try {
-                const response = await fetch(apiUrl, {
+                const response = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
@@ -44,15 +94,43 @@
 
                 const text = await response.text();
                 if (response.ok) {
-                    resultDiv.className = 'success is-visible';
-                    resultDiv.innerHTML = `Done. Short link: <a href="${text}" target="_blank">${text}</a>`;
+                    try {
+                        const path = new URL(text).pathname;
+                        const code = path.split('/').filter(Boolean).pop() || '';
+                        if (code) {
+                            document.getElementById('deleteCode').value = code;
+                        }
+                    } catch {
+                        /* response was not an absolute URL */
+                    }
+                    showResult(true, `Done. Short link: <a href="${text}" target="_blank" rel="noopener">${text}</a>`);
                 } else {
-                    resultDiv.className = 'error is-visible';
-                    resultDiv.innerText = `Error ${response.status}: ${text || response.statusText}`;
+                    showResult(false, `Error ${response.status}: ${text || response.statusText}`);
                 }
             } catch (error) {
-                resultDiv.className = 'error is-visible';
-                resultDiv.innerText = "Error: " + error.message + ". Check that the function is running and CORS allows this origin.";
+                showResult(false, 'Error: ' + error.message + '. Check that the function is running and CORS allows this origin.');
+            }
+        }
+
+        async function deleteShortUrl() {
+            const code = document.getElementById('deleteCode').value.trim();
+            if (!code) {
+                alert('Please enter the short code to delete.');
+                return;
+            }
+
+            const url = apiBase() + '/delete/' + encodeURIComponent(code);
+
+            try {
+                const response = await fetch(url, { method: 'DELETE' });
+                const text = await response.text();
+                if (response.ok) {
+                    showResult(true, text || 'Deleted.');
+                } else {
+                    showResult(false, `Error ${response.status}: ${text || response.statusText}`);
+                }
+            } catch (error) {
+                showResult(false, 'Error: ' + error.message + '. Check CORS allows DELETE from this origin.');
             }
         }
     </script>
