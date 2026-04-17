@@ -1,106 +1,58 @@
 ﻿<!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>URL Shortener Tester</title>
-    <style>
-        body {
-            font-family: sans-serif;
-            max-width: 600px;
-            margin: 50px auto;
-            padding: 20px;
-            line-height: 1.6;
-        }
-
-        input {
-            width: 100%;
-            padding: 10px;
-            margin-bottom: 10px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-        }
-
-        button {
-            padding: 10px 20px;
-            background-color: #0078d4;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-
-            button:hover {
-                background-color: #005a9e;
-            }
-
-        #result {
-            margin-top: 20px;
-            padding: 15px;
-            border-radius: 4px;
-            display: none;
-        }
-
-        .success {
-            background-color: #dff6dd;
-            color: #107c10;
-            border: 1px solid #107c10;
-        }
-
-        .error {
-            background-color: #fde7e9;
-            color: #a4262c;
-            border: 1px solid #a4262c;
-        }
-
-        a {
-            color: #0078d4;
-            font-weight: bold;
-        }
-    </style>
+    <link rel="stylesheet" href="test.css">
 </head>
 <body>
 
-    <h2>Тестирование Azure Function Shortener</h2>
-    <p>Введите длинный URL для сокращения:</p>
+    <h2>Azure Function URL shortener — test page</h2>
+    <p>Enter the long URL to shorten:</p>
 
     <input type="url" id="longUrl" placeholder="https://example.com/very-long-page-address" required>
-    <button onclick="shortenUrl()">Сократить ссылку</button>
+    <p>Optional - your own short code (letters, digits, underscore, hyphen):</p>
+    <input type="text" id="customCode" placeholder="e.g. google (leave empty for auto)" autocomplete="off">
+    <button onclick="shortenUrl()">Shorten URL</button>
 
     <div id="result"></div>
 
     <script>
         async function shortenUrl() {
-            const longUrl = document.getElementById('longUrl').value;
+            const longUrl = document.getElementById('longUrl').value.trim();
+            const customRaw = document.getElementById('customCode').value.trim();
             const resultDiv = document.getElementById('result');
             const apiUrl = 'https://urlshortnerfunctionapp20260416202904-fwevcfctdaged5g0.germanywestcentral-01.azurewebsites.net/api/shorten';
 
             if (!longUrl) {
-                alert("Пожалуйста, введите URL");
+                alert("Please enter a URL.");
                 return;
+            }
+
+            const body = { url: longUrl };
+            if (customRaw) {
+                body.customCode = customRaw;
             }
 
             try {
                 const response = await fetch(apiUrl, {
                     method: 'POST',
-                    body: longUrl, // Твоя функция читает ReadAsStringAsync() напрямую
-                    headers: {
-                        'Content-Type': 'text/plain'
-                    }
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
                 });
 
+                const text = await response.text();
                 if (response.ok) {
-                    const shortUrl = await response.text();
-                    resultDiv.className = 'success';
-                    resultDiv.style.display = 'block';
-                    resultDiv.innerHTML = `Готово! Короткая ссылка: <a href="${shortUrl}" target="_blank">${shortUrl}</a>`;
+                    resultDiv.className = 'success is-visible';
+                    resultDiv.innerHTML = `Done. Short link: <a href="${text}" target="_blank">${text}</a>`;
                 } else {
-                    throw new Error(`Ошибка сервера: ${response.status}`);
+                    resultDiv.className = 'error is-visible';
+                    resultDiv.innerText = `Error ${response.status}: ${text || response.statusText}`;
                 }
             } catch (error) {
-                resultDiv.className = 'error';
-                resultDiv.style.display = 'block';
-                resultDiv.innerText = "Ошибка: " + error.message + ". Убедитесь, что Azure Function запущена и CORS разрешен.";
+                resultDiv.className = 'error is-visible';
+                resultDiv.innerText = "Error: " + error.message + ". Check that the function is running and CORS allows this origin.";
             }
         }
     </script>

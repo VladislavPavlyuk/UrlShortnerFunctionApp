@@ -1,72 +1,120 @@
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
-using Microsoft.Extensions.Logging;
 
 namespace UrlShortnerFunctionApp;
 
+// Matches the JSON body from POST /api/shorten (property names can be any casing).
+public class ShortenRequest
+{
+    public string Url { get; set; } = string.Empty;
+    public string? CustomCode { get; set; }
+}
+
 public class UrlShortnerFunctions
 {
+    // In memory: short code -> full URL. Resets when the app restarts.
     private static readonly Dictionary<string, string> UrlMappings = new Dictionary<string, string>();
+    private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+    private static readonly Regex CustomCodePattern = new(@"^[a-zA-Z0-9_-]+$", RegexOptions.Compiled);
 
-    // This function handles the URL shortening logic. 
+    private const int MaxCustomCodeLength = 64;
+
     [Function("ShortenUrl")]
     public static async Task<HttpResponseData> ShortenUrl(
         [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "shorten")] HttpRequestData req,
         FunctionContext executionContext)
     {
-        //Step 1: Read the long URL from the request body
+        var requestBody = await req.ReadAsStringAsync();
 
-        var longLink = await req.ReadAsStringAsync(); // Read the long URL from the request body
-
-        //Step 2: Generate a unique short code
-
-        if (string.IsNullOrEmpty(longLink))
+        if (string.IsNullOrWhiteSpace(requestBody))
         {
-            var badResponse = req.CreateResponse(System.Net.HttpStatusCode.BadRequest); // Return a bad request response if the long URL is missing
+            var emptyBody = req.CreateResponse(System.Net.HttpStatusCode.BadRequest);
+            await emptyBody.WriteStringAsync("Please provide a JSON body with a \"url\" field.");
+            return emptyBody;
+        }
+
+        ShortenRequest? data;
+        try
+        {
+            // Turn the JSON text into a C# object we can use.
+            data = JsonSerializer.Deserialize<ShortenRequest>(requestBody, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            var invalidJson = req.CreateResponse(System.Net.HttpStatusCode.BadRequest);
+            await invalidJson.WriteStringAsync("Invalid JSON.");
+            return invalidJson;
+        }
+
+        if (data is null || string.IsNullOrWhiteSpace(data.Url))
+        {
+            var badResponse = req.CreateResponse(System.Net.HttpStatusCode.BadRequest);
             await badResponse.WriteStringAsync("Please provide a valid URL in the request body.");
             return badResponse;
         }
 
-        // Step 3: Store the mapping of the short code to the long URL
+        var longLink = data.Url.Trim();
+        var custom = data.CustomCode?.Trim();
 
-        var code = Guid.NewGuid().ToString().Substring(0, 6); // Generate a unique short code (using the first 6 characters of a GUID)
+        string code;
+        if (string.IsNullOrEmpty(custom))
+        {
+            // No custom code: pick a random short string (same idea as before).
+            do
+            {
+                code = Guid.NewGuid().ToString("N")[..6];
+            } while (UrlMappings.ContainsKey(code)); // Very unlikely, but avoid a duplicate key.
+        }
+        else
+        {
+            // Custom code must be safe to put in a URL path (letters, numbers, _ and -).
+            if (custom.Length > MaxCustomCodeLength || !CustomCodePattern.IsMatch(custom))
+            {
+                var invalidCode = req.CreateResponse(System.Net.HttpStatusCode.BadRequest);
+                await invalidCode.WriteStringAsync(
+                    $"Custom code must be 1–{MaxCustomCodeLength} characters and contain only letters, digits, underscore or hyphen.");
+                return invalidCode;
+            }
 
-        UrlMappings[code] = longLink; // Store the mapping of the short code to the long URL
+            if (UrlMappings.ContainsKey(custom))
+            {
+                // Someone already registered this short code.
+                var conflict = req.CreateResponse(System.Net.HttpStatusCode.Conflict);
+                await conflict.WriteStringAsync("This short code is already in use.");
+                return conflict;
+            }
 
-        // Step 4: Return the short URL to the client
+            code = custom;
+        }
 
-        var host = req.Url.GetLeftPart(UriPartial.Authority); // Get the host part of the request URL
+        UrlMappings[code] = longLink; // Remember this pair for GET /api/r/{code}
 
-        string shortUrl = $"{host}/api/r/{code}"; // Construct the short URL using the host and the short code
+        var host = req.Url.GetLeftPart(UriPartial.Authority);
+        string shortUrl = $"{host}/api/r/{code}";
 
-        var response = req.CreateResponse(System.Net.HttpStatusCode.OK); // Create a response with status code 200 OK
-
-        await response.WriteStringAsync(shortUrl); // Write the short URL to the response body
-
-        return response; // Return the response to the client
+        var response = req.CreateResponse(System.Net.HttpStatusCode.OK);
+        await response.WriteStringAsync(shortUrl);
+        return response;
     }
 
-    // This function handles the redirection logic when a short URL is accessed.
+    // GET /api/r/{code} — send the browser to the saved long URL.
     [Function("RedirectToLongUrl")]
-
     public static async Task<HttpResponseData> RedirectToLongUrl(
         [HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = "r/{code}")] HttpRequestData req,
         string code,
         FunctionContext executionContext)
     {
-        if (UrlMappings.TryGetValue(code, out var longLink)) // Check if the short code exists in the mappings
+        if (UrlMappings.TryGetValue(code, out var longLink))
         {
-            var response = req.CreateResponse(System.Net.HttpStatusCode.Redirect); // Create a response with status code 302 Redirect
-            response.Headers.Add("Location", longLink); // Set the Location header to the long URL for redirection
-            return response; // Return the redirect response to the client
+            var response = req.CreateResponse(System.Net.HttpStatusCode.Redirect);
+            response.Headers.Add("Location", longLink);
+            return response;
         }
-        else
-        {
-            var notFoundResponse = req.CreateResponse(System.Net.HttpStatusCode.NotFound); // Create a response with status code 404 Not Found if the short code does not exist
-            await notFoundResponse.WriteStringAsync("Short URL not found."); // Write an error message to the response body
-            return notFoundResponse; // Return the not found response to the client
-        }
+
+        var notFoundResponse = req.CreateResponse(System.Net.HttpStatusCode.NotFound);
+        await notFoundResponse.WriteStringAsync("Short URL not found.");
+        return notFoundResponse;
     }
 }
